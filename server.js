@@ -14,6 +14,7 @@ const port = process.env.PORT || 3000;
 // ----------------------------------------------------
 
 // FIX 1: Allow Express to trust proxy headers (Required for Render and Rate Limiting)
+// นี่คือการแก้ไขปัญหา Rate Limit Validation Error บน Render
 app.set('trust proxy', 1); 
 
 // ----------------------------------------------------
@@ -24,9 +25,13 @@ app.set('trust proxy', 1);
 app.use(helmet());
 
 // CORS configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',');
+
 const corsOptions = {
-    // Allows multiple origins based on environment variable (or '*' for testing)
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    // FIX 2: เปลี่ยนค่า Default ให้เป็น Array ['*'] เพื่อให้ CORS Middleware ทำงานถูกต้องกับค่า Default
+    // หาก ALLOWED_ORIGINS ใน ENV ถูกตั้งค่าไว้ จะใช้ค่านั้น
+    // ถ้าไม่ตั้งค่า (เป็น undefined) จะใช้ ['*'] เพื่ออนุญาตทุก Origin (ใช้สำหรับการดีบั๊ก Localhost)
+    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : ['*'],
     methods: ['GET', 'POST'],
     credentials: true
 };
@@ -262,7 +267,7 @@ app.use((error, req, res, next) => {
 // Start Server (Fix for Render/Production)
 // ----------------------------------------------------
 
-const host = '0.0.0.0'; // Forces the server to bind to all available network interfaces (Required for Render)
+const host = '0.0.0.0'; // FIX 3: Forces the server to bind to all available network interfaces (Required for Render)
 
 app.listen(port, host, () => {
     console.log(`
