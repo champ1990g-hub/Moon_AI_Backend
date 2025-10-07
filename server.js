@@ -10,6 +10,13 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // ----------------------------------------------------
+// Production Stability Fixes
+// ----------------------------------------------------
+
+// FIX 1: Allow Express to trust proxy headers (Required for Render and Rate Limiting)
+app.set('trust proxy', 1); 
+
+// ----------------------------------------------------
 // Middleware Configuration
 // ----------------------------------------------------
 
@@ -18,6 +25,7 @@ app.use(helmet());
 
 // CORS configuration
 const corsOptions = {
+    // Allows multiple origins based on environment variable (or '*' for testing)
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
     methods: ['GET', 'POST'],
     credentials: true
@@ -50,6 +58,7 @@ app.use('/api/', apiLimiter);
 
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ GEMINI_API_KEY is not set in environment variables.');
+    // In production, force exit if the key is missing
     process.exit(1);
 }
 
@@ -138,8 +147,10 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         // Validate userId
         if (!userId || typeof userId !== 'string') {
             if (res.headersSent) {
+                // If headers were sent (streaming started), end the stream with an error
                 return res.end(`\n\n⚠️ ERROR: Missing or invalid userId.`);
             }
+            // If headers were not sent, send a standard JSON error
             return res.status(400).json({ 
                 error: 'Missing or invalid userId. Please provide a valid user identifier.' 
             });
@@ -180,7 +191,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
     } catch (error) {
         console.error('❌ Error in /api/chat/send:', error);
         
-        // Handle Error: If headers were already sent (streaming started), end the stream with an error message
+        // Handle Error: If headers were already sent, end the stream with an error message
         if (res.headersSent) {
             let errorMessage = 'Failed to get full response.';
             if (error.message?.includes('quota')) {
@@ -193,7 +204,6 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
              // If headers haven't been sent, send a normal JSON error response
             const details = process.env.NODE_ENV === 'development' ? error.message : 'Internal server error';
             
-            // Handle specific error types before sending generic response
             if (error.message?.includes('quota')) {
                  return res.status(429).json({ error: 'API quota exceeded. Please try again later.' });
             }
@@ -268,12 +278,12 @@ app.listen(port, host, () => {
 });
 
 // ----------------------------------------------------
-// Global Process Error Handling (NEW)
+// Global Process Error Handling (Ensures process stability)
 // ----------------------------------------------------
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-    // Log the error but allow the process to continue running
+    // Log the error but allow the process to continue running if possible
 });
 
 process.on('uncaughtException', (error) => {
