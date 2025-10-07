@@ -267,6 +267,22 @@ app.listen(port, host, () => {
     `);
 });
 
+// ----------------------------------------------------
+// Global Process Error Handling (NEW)
+// ----------------------------------------------------
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Log the error but allow the process to continue running
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error.message, error.stack);
+    // Uncaught exceptions are critical. Log and exit gracefully.
+    process.exit(1); 
+});
+
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('🛑 SIGTERM received. Shutting down gracefully...');
