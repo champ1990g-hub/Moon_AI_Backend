@@ -13,8 +13,7 @@ const port = process.env.PORT || 3000;
 // Production Stability Fixes
 // ----------------------------------------------------
 
-// FIX 1: Allow Express to trust proxy headers (Required for Render and Rate Limiting)
-// นี่คือการแก้ไขปัญหา Rate Limit Validation Error บน Render
+// FIX 1: Allow Express to trust proxy headers (Required for Render/Proxies and Rate Limiting)
 app.set('trust proxy', 1); 
 
 // ----------------------------------------------------
@@ -28,9 +27,7 @@ app.use(helmet());
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',');
 
 const corsOptions = {
-    // FIX 2: เปลี่ยนค่า Default ให้เป็น Array ['*'] เพื่อให้ CORS Middleware ทำงานถูกต้องกับค่า Default
-    // หาก ALLOWED_ORIGINS ใน ENV ถูกตั้งค่าไว้ จะใช้ค่านั้น
-    // ถ้าไม่ตั้งค่า (เป็น undefined) จะใช้ ['*'] เพื่ออนุญาตทุก Origin (ใช้สำหรับการดีบั๊ก Localhost)
+    // FIX 2: Allow all origins if ALLOWED_ORIGINS is not set (for local development)
     origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : ['*'],
     methods: ['GET', 'POST'],
     credentials: true
@@ -42,16 +39,16 @@ app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
+    windowMs: 15 * 60 * 1000, 
+    max: 100, 
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
 });
 
 const chatLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 20, // limit each IP to 20 chat requests per minute
+    windowMs: 1 * 60 * 1000, 
+    max: 20, 
     message: { error: 'Too many chat requests, please slow down.' }
 });
 
@@ -63,7 +60,6 @@ app.use('/api/', apiLimiter);
 
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ GEMINI_API_KEY is not set in environment variables.');
-    // In production, force exit if the key is missing
     process.exit(1);
 }
 
@@ -117,7 +113,6 @@ function getUserSession(userId) {
         });
         console.log(`✨ Created new session for user: ${userId}`);
     } else {
-        // Update last activity
         userSessions.get(userId).lastActivity = Date.now();
     }
     
@@ -149,38 +144,32 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
     try {
         const { message, userId } = req.body;
         
-        // Validate userId
         if (!userId || typeof userId !== 'string') {
+            // If headers are sent, we can't send JSON anymore, just end the stream with an error
             if (res.headersSent) {
-                // If headers were sent (streaming started), end the stream with an error
-                return res.end(`\n\n⚠️ ERROR: Missing or invalid userId.`);
+                return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: Missing or invalid userId.`);
             }
-            // If headers were not sent, send a standard JSON error
             return res.status(400).json({ 
                 error: 'Missing or invalid userId. Please provide a valid user identifier.' 
             });
         }
         
-        // Validate message
         const validation = validateMessage(message);
         if (!validation.valid) {
-            if (res.headersSent) {
-                 return res.end(`\n\n⚠️ ERROR: ${validation.error}`);
+             if (res.headersSent) {
+                 return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: ${validation.error}`);
             }
             return res.status(400).json({ error: validation.error });
         }
         
         console.log(`💬 User ${userId}: ${validation.message.substring(0, 50)}...`);
         
-        // Get or create user session
         const chatSession = getUserSession(userId);
         
-        // Use sendMessageStream
         const responseStream = await chatSession.sendMessageStream({ 
             message: validation.message 
         });
         
-        // Loop through the stream and write to the response
         for await (const chunk of responseStream) {
             const chunkText = chunk.text;
             if (chunkText) {
@@ -189,24 +178,22 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         }
         
         console.log(`🤖 AI Response stream finished for user ${userId}`);
-        
-        // End the response
         res.end();
         
     } catch (error) {
         console.error('❌ Error in /api/chat/send:', error);
         
-        // Handle Error: If headers were already sent, end the stream with an error message
+        let errorMessage = 'Failed to get full response.';
+        if (error.message?.includes('quota')) {
+             errorMessage = 'API Quota Exceeded. Please try again later.';
+        } else if (error.message?.includes('API key')) {
+             errorMessage = 'Authentication error. Invalid API configuration.';
+        }
+
         if (res.headersSent) {
-            let errorMessage = 'Failed to get full response.';
-            if (error.message?.includes('quota')) {
-                 errorMessage = 'API Quota Exceeded. Please try again later.';
-            } else if (error.message?.includes('API key')) {
-                 errorMessage = 'Authentication error. Invalid API configuration.';
-            }
-            res.end(`\n\n⚠️ ERROR: ${errorMessage}`);
+            // FIX 4: Send a structured error message to the stream for client handling
+            res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: ${errorMessage}.`); 
         } else {
-             // If headers haven't been sent, send a normal JSON error response
             const details = process.env.NODE_ENV === 'development' ? error.message : 'Internal server error';
             
             if (error.message?.includes('quota')) {
@@ -249,6 +236,7 @@ app.post('/api/chat/clear', async (req, res) => {
     }
 });
 
+
 // 404 handler
 app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
@@ -263,11 +251,12 @@ app.use((error, req, res, next) => {
     });
 });
 
+
 // ----------------------------------------------------
-// Start Server (Fix for Render/Production)
+// Start Server (Production Ready)
 // ----------------------------------------------------
 
-const host = '0.0.0.0'; // FIX 3: Forces the server to bind to all available network interfaces (Required for Render)
+const host = '0.0.0.0'; // FIX 3: Ensures binding to the correct interface for Production/Render
 
 app.listen(port, host, () => {
     console.log(`
@@ -288,15 +277,14 @@ app.listen(port, host, () => {
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-    // Log the error but allow the process to continue running if possible
 });
 
 process.on('uncaughtException', (error) => {
     console.error('❌ Uncaught Exception:', error.message, error.stack);
-    // Uncaught exceptions are critical. Log and exit gracefully.
+    // Graceful shutdown after uncaught exception
+    userSessions.clear();
     process.exit(1); 
 });
-
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
