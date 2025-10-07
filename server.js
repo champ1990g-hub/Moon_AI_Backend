@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { GoogleGenAI } from '@google/genai'; // 👈 ใช้ GoogleGenAI
+import { GoogleGenAI } from '@google/genai';
 import 'dotenv/config';
 
 const app = express();
@@ -42,7 +42,6 @@ const chatLimiter = rateLimit({
     message: { error: 'Too many chat requests, please slow down.' }
 });
 
-// ใช้ apiLimiter กับ API ทั่วไปทั้งหมด
 app.use('/api/', apiLimiter); 
 
 // ----------------------------------------------------
@@ -67,7 +66,7 @@ setInterval(() => {
     for (const [userId, session] of userSessions.entries()) {
         if (now - session.lastActivity > SESSION_TIMEOUT) {
             userSessions.delete(userId);
-            console.log(`🗑️  Cleaned up session for user: ${userId}`);
+            console.log(`🗑️  Session cleaned for user: ${userId}`);
         }
     }
 }, 10 * 60 * 1000);
@@ -125,11 +124,11 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ❗❗❗ Endpoint สำหรับส่งข้อความ (STREAMING LOGIC) ❗❗❗
+// Chat send endpoint (STREAMING LOGIC)
 app.post('/api/chat/send', chatLimiter, async (req, res) => {
     
-    // 1. ตั้งค่า Header สำหรับ Streaming ก่อนเริ่ม Process
-    res.setHeader('Content-Type', 'text/plain'); // Frontend จะอ่านเป็นข้อความดิบ
+    // Set headers for Streaming
+    res.setHeader('Content-Type', 'text/plain'); 
     res.setHeader('Transfer-Encoding', 'chunked');
     res.status(200); 
 
@@ -160,29 +159,28 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         // Get or create user session
         const chatSession = getUserSession(userId);
         
-        // 2. ใช้ sendMessageStream
+        // Use sendMessageStream
         const responseStream = await chatSession.sendMessageStream({ 
             message: validation.message 
         });
         
-        // 3. วนลูปอ่าน Stream และใช้ res.write() ส่งกลับทีละ Chunk
+        // Loop through the stream and write to the response
         for await (const chunk of responseStream) {
             const chunkText = chunk.text;
             if (chunkText) {
-                // ส่งข้อมูลออกไปทันที
                 res.write(chunkText);
             }
         }
         
         console.log(`🤖 AI Response stream finished for user ${userId}`);
         
-        // 4. จบการตอบกลับ
+        // End the response
         res.end();
         
     } catch (error) {
         console.error('❌ Error in /api/chat/send:', error);
         
-        // จัดการ Error: ถ้า Headers ถูกส่งไปแล้ว (res.headersSent เป็น true) ให้จบ Stream ด้วยข้อความ Error
+        // Handle Error: If headers were already sent (streaming started), end the stream with an error message
         if (res.headersSent) {
             let errorMessage = 'Failed to get full response.';
             if (error.message?.includes('quota')) {
@@ -192,7 +190,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
             }
             res.end(`\n\n⚠️ ERROR: ${errorMessage}`);
         } else {
-             // ถ้า Headers ยังไม่ถูกส่ง ให้ส่ง Error แบบ JSON ปกติ
+             // If headers haven't been sent, send a normal JSON error response
             const details = process.env.NODE_ENV === 'development' ? error.message : 'Internal server error';
             
             // Handle specific error types before sending generic response
@@ -211,7 +209,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
     }
 });
 
-// Clear user session endpoint (โค้ดเดิม)
+// Clear user session endpoint
 app.post('/api/chat/clear', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -222,7 +220,7 @@ app.post('/api/chat/clear', async (req, res) => {
         
         if (userSessions.has(userId)) {
             userSessions.delete(userId);
-            console.log(`🗑️  Cleared session for user: ${userId}`);
+            console.log(`🗑️  Cleared session for user: ${userId}`);
         }
         
         res.json({ 
@@ -251,20 +249,22 @@ app.use((error, req, res, next) => {
 });
 
 // ----------------------------------------------------
-// Start Server
+// Start Server (Fix for Render/Production)
 // ----------------------------------------------------
 
-app.listen(port, () => {
+const host = '0.0.0.0'; // Forces the server to bind to all available network interfaces (Required for Render)
+
+app.listen(port, host, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║   🤖 Gemini Chatbot Backend (Production Ready)       ║
-║   ✅ Server running at http://localhost:${port}       ║
-║   ✅ Health check: http://localhost:${port}/health    ║
-║   📦 Model: ${modelName}                              ║
-║   🔒 Security: Enabled                                ║
-║   ⚡ Rate limiting: Active                            ║
+║   🤖 Gemini Chatbot Backend (Production Ready)        ║
+║   ✅ Server running at http://${host}:${port}         ║
+║   ✅ Health check: http://${host}:${port}/health      ║
+║   📦 Model: ${modelName}                              ║
+║   🔒 Security: Enabled                                ║
+║   ⚡ Rate limiting: Active                             ║
 ╚═══════════════════════════════════════════════════════╝
-    `);
+    `);
 });
 
 // Graceful shutdown
