@@ -262,11 +262,11 @@ app.listen(port, host, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
 ║   🤖 Gemini Chatbot Backend (Production Ready)        ║
-║   ✅ Server running at http://${host}:${port}         ║
-║   ✅ Health check: http://${host}:${port}/health      ║
+║   ✅ Server running at: 0.0.0.0:${port}               ║
+║   ✅ Health check: /health                            ║
 ║   📦 Model: ${modelName}                              ║
 ║   🔒 Security: Enabled                                ║
-║   ⚡ Rate limiting: Active                             ║
+║   ⚡ Rate limiting: Active                            ║
 ╚═══════════════════════════════════════════════════════╝
     `);
 });
