@@ -1,4 +1,4 @@
-// server.js - FIXED VERSION
+// server.js - Production Ready Version
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -21,25 +21,29 @@ app.set('trust proxy', 1);
 
 app.use(helmet());
 
-// CORS Configuration
+// CORS configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean);
 
 const corsOptions = {
     origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, Postman, curl, etc.)
         if (!origin) return callback(null, true);
         
+        // In development, allow all origins
         if (process.env.NODE_ENV !== 'production') {
             return callback(null, true);
         }
         
+        // In production, check whitelist
         if (!allowedOrigins || allowedOrigins.length === 0) {
-            console.warn('⚠️  WARNING: ALLOWED_ORIGINS not set. Blocking request from:', origin);
-            return callback(new Error('CORS not configured'));
+            console.warn('⚠️  WARNING: ALLOWED_ORIGINS not set. Allowing request from:', origin);
+            return callback(null, true); // Allow in case of misconfiguration
         }
         
         if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
             callback(null, true);
         } else {
+            console.warn('⚠️  CORS blocked:', origin);
             callback(new Error('Not allowed by CORS'));
         }
     },
@@ -49,23 +53,25 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Body parser
 app.use(express.json({ limit: '10mb' }));
 
-// ✅ FIXED: Rate limiting (ลบ custom keyGenerator ออก)
+// Rate limiting (FIXED - ไม่มี custom keyGenerator)
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, 
-    max: 100, 
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // 100 requests per windowMs
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
-    legacyHeaders: false
-    // ✅ ไม่ต้องใส่ keyGenerator เพราะจะใช้ default ที่รองรับ IPv6
+    legacyHeaders: false,
 });
 
 const chatLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, 
-    max: 20, 
-    message: { error: 'Too many chat requests, please slow down.' }
-    // ✅ ไม่ต้องใส่ keyGenerator
+    windowMs: 1 * 60 * 1000, // 1 minute
+    max: 20, // 20 requests per windowMs
+    message: { error: 'Too many chat requests, please slow down.' },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 
 app.use('/api/', apiLimiter); 
@@ -76,16 +82,18 @@ app.use('/api/', apiLimiter);
 
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ GEMINI_API_KEY is not set in environment variables.');
+    console.error('   Please add it to your environment variables and restart.');
     process.exit(1);
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-// Session management
+// Session management - Store sessions per user
 const userSessions = new Map();
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
+// Session statistics
 let sessionStats = {
     created: 0,
     cleared: 0,
@@ -157,7 +165,22 @@ function getUserSession(userId) {
 // API Endpoints
 // ----------------------------------------------------
 
-// Health check
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Gemini Chatbot API',
+        version: '1.0.0',
+        status: 'running',
+        endpoints: {
+            health: 'GET /health',
+            chat: 'POST /api/chat/send',
+            clear: 'POST /api/chat/clear'
+        },
+        documentation: 'https://github.com/yourusername/yourrepo'
+    });
+});
+
+// Health check endpoint
 app.get('/health', (req, res) => {
     const memoryUsage = process.memoryUsage();
     
@@ -169,30 +192,18 @@ app.get('/health', (req, res) => {
         stats: sessionStats,
         memory: {
             heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
-            heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`
+            heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+            rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`
         },
         model: modelName,
         environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-    res.json({
-        name: 'Gemini Chatbot API',
-        version: '1.0.0',
-        status: 'running',
-        endpoints: {
-            health: 'GET /health',
-            chat: 'POST /api/chat/send',
-            clear: 'POST /api/chat/clear'
-        }
-    });
-});
-
 // Chat send endpoint (STREAMING)
 app.post('/api/chat/send', chatLimiter, async (req, res) => {
     
+    // Set headers for Streaming
     res.setHeader('Content-Type', 'text/plain; charset=utf-8'); 
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('Cache-Control', 'no-cache');
@@ -202,6 +213,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
     try {
         const { message, userId } = req.body;
         
+        // Validate userId
         if (!userId || typeof userId !== 'string') {
             if (res.headersSent) {
                 return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: Missing or invalid userId.`);
@@ -211,6 +223,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
             });
         }
         
+        // Validate message
         const validation = validateMessage(message);
         if (!validation.valid) {
             if (res.headersSent) {
@@ -221,9 +234,11 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         
         console.log(`💬 [${userId}] ${validation.message.substring(0, 50)}${validation.message.length > 50 ? '...' : ''}`);
         
+        // Get or create user session
         const chatSession = getUserSession(userId);
         sessionStats.messagesProcessed++;
         
+        // Send message and stream response
         const responseStream = await chatSession.sendMessageStream({ 
             message: validation.message 
         });
@@ -246,6 +261,7 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         let errorMessage = 'Failed to get response from AI.';
         let statusCode = 500;
         
+        // Handle specific error types
         if (error.message?.includes('quota')) {
             errorMessage = 'API quota exceeded. Please try again later.';
             statusCode = 429;
@@ -255,8 +271,12 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         } else if (error.message?.includes('timeout')) {
             errorMessage = 'Request timeout. Please try again.';
             statusCode = 408;
+        } else if (error.message?.includes('rate limit')) {
+            errorMessage = 'Rate limit exceeded. Please slow down.';
+            statusCode = 429;
         }
 
+        // Send error response
         if (res.headersSent) {
             res.end(`\n\n[STREAM_ERROR] ⚠️ ${errorMessage}`); 
         } else {
@@ -300,7 +320,13 @@ app.use((req, res) => {
     res.status(404).json({ 
         error: 'Endpoint not found',
         path: req.path,
-        method: req.method
+        method: req.method,
+        availableEndpoints: {
+            root: 'GET /',
+            health: 'GET /health',
+            chat: 'POST /api/chat/send',
+            clear: 'POST /api/chat/clear'
+        }
     });
 });
 
@@ -308,10 +334,15 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
     console.error('❌ Unhandled error:', error);
     
+    // Handle CORS errors
     if (error.message === 'Not allowed by CORS') {
-        return res.status(403).json({ error: 'CORS policy violation' });
+        return res.status(403).json({ 
+            error: 'CORS policy violation',
+            message: 'Origin not allowed'
+        });
     }
     
+    // Generic error response
     res.status(500).json({ 
         error: 'Internal server error',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -319,7 +350,7 @@ app.use((error, req, res, next) => {
 });
 
 // ----------------------------------------------------
-// Start Server
+// Start Server (Production Ready)
 // ----------------------------------------------------
 
 const host = '0.0.0.0';
@@ -333,26 +364,40 @@ const server = app.listen(port, host, () => {
 ║   📦 Model: ${modelName}                              ║
 ║   🔒 Security: Enabled                                ║
 ║   ⚡ Rate limiting: Active                            ║
-║   🌐 CORS: ${allowedOrigins?.length || 0} origin(s) allowed              ║
+║   🌐 CORS: ${allowedOrigins?.length || 'Not configured'}                        ║
 ╚═══════════════════════════════════════════════════════╝
     `);
     
     if (!allowedOrigins || allowedOrigins.length === 0) {
         console.warn('⚠️  WARNING: ALLOWED_ORIGINS not configured!');
-        console.warn('   Set ALLOWED_ORIGINS in environment variables for production.');
+        console.warn('   All origins are currently allowed in production.');
+        console.warn('   Set ALLOWED_ORIGINS in environment variables for better security.');
     }
 });
 
 // ----------------------------------------------------
-// Graceful Shutdown
+// Global Process Error Handling
 // ----------------------------------------------------
 
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise);
+    console.error('   Reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error.message);
+    console.error('   Stack:', error.stack);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+// Graceful shutdown
 function gracefulShutdown(signal) {
     console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
     
     server.close(() => {
         console.log('✅ HTTP server closed');
         
+        // Clear all sessions
         const sessionCount = userSessions.size;
         userSessions.clear();
         console.log(`✅ Cleared ${sessionCount} active sessions`);
@@ -361,6 +406,7 @@ function gracefulShutdown(signal) {
         process.exit(0);
     });
     
+    // Force shutdown after 10 seconds
     setTimeout(() => {
         console.error('⚠️  Forced shutdown after timeout');
         process.exit(1);
@@ -369,13 +415,3 @@ function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error.message);
-    console.error(error.stack);
-    gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
