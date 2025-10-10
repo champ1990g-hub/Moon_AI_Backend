@@ -1,26 +1,28 @@
 {
   "name": "gemini-chatbot",
-  "version": "2.0.0",
-  "description": "Gemini Streaming Chatbot Backend - Production Ready",
+  "version": "2.0.1",
+  "description": "Gemini Streaming Chatbot Backend",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "echo \"✅ No tests specified\" && exit 0"
+    "dev": "node --watch server.js"
   },
-  "keywords": ["gemini", "ai", "chatbot", "streaming", "express", "api"],
-  "author": "Your Name",
+  "keywords": [
+    "gemini",
+    "ai",
+    "chatbot",
+    "streaming",
+    "express"
+  ],
+  "author": "",
   "license": "MIT",
   "dependencies": {
     "@google/genai": "^1.21.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "express-rate-limit": "^8.1.0",
-    "helmet": "^8.1.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0"
   }
 }
