@@ -1,4 +1,4 @@
-// server.js
+// server.js - IMPROVED VERSION
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -13,28 +13,46 @@ const port = process.env.PORT || 3000;
 // Production Stability Fixes
 // ----------------------------------------------------
 
-// FIX 1: Allow Express to trust proxy headers (Required for Render/Proxies and Rate Limiting)
 app.set('trust proxy', 1); 
 
 // ----------------------------------------------------
 // Middleware Configuration
 // ----------------------------------------------------
 
-// Security headers
 app.use(helmet());
 
-// CORS configuration
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',');
+// IMPROVED CORS Configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean);
 
 const corsOptions = {
-    // FIX 2: Allow all origins if ALLOWED_ORIGINS is not set (for local development)
-    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : ['*'],
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) return callback(null, true);
+        
+        // In development, allow all origins
+        if (process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        
+        // In production, check whitelist
+        if (!allowedOrigins || allowedOrigins.length === 0) {
+            console.warn('⚠️  WARNING: ALLOWED_ORIGINS not set. Blocking request from:', origin);
+            return callback(new Error('CORS not configured'));
+        }
+        
+        if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
+    optionsSuccessStatus: 200
 };
+
 app.use(cors(corsOptions));
 
-// Body parser
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting
@@ -44,12 +62,22 @@ const apiLimiter = rateLimit({
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    // IMPROVED: Custom key generator for better tracking
+    keyGenerator: (req) => {
+        return req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    }
 });
 
 const chatLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, 
     max: 20, 
-    message: { error: 'Too many chat requests, please slow down.' }
+    message: { error: 'Too many chat requests, please slow down.' },
+    keyGenerator: (req) => {
+        // Rate limit per userId + IP for better control
+        const userId = req.body?.userId || 'anonymous';
+        const ip = req.ip || 'unknown';
+        return `${userId}-${ip}`;
+    }
 });
 
 app.use('/api/', apiLimiter); 
@@ -66,18 +94,33 @@ if (!process.env.GEMINI_API_KEY) {
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-// Session management - Store sessions per user
+// Session management
 const userSessions = new Map();
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+
+// IMPROVED: More detailed session stats
+let sessionStats = {
+    created: 0,
+    cleared: 0,
+    expired: 0,
+    messagesProcessed: 0
+};
 
 // Clean up old sessions every 10 minutes
 setInterval(() => {
     const now = Date.now();
+    let expiredCount = 0;
+    
     for (const [userId, session] of userSessions.entries()) {
         if (now - session.lastActivity > SESSION_TIMEOUT) {
             userSessions.delete(userId);
-            console.log(`🗑️  Session cleaned for user: ${userId}`);
+            expiredCount++;
+            sessionStats.expired++;
         }
+    }
+    
+    if (expiredCount > 0) {
+        console.log(`🗑️  Cleaned ${expiredCount} expired sessions. Active: ${userSessions.size}`);
     }
 }, 10 * 60 * 1000);
 
@@ -109,11 +152,15 @@ function getUserSession(userId) {
         userSessions.set(userId, {
             session: chatSession,
             lastActivity: Date.now(),
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            messageCount: 0 // Track messages per session
         });
-        console.log(`✨ Created new session for user: ${userId}`);
+        sessionStats.created++;
+        console.log(`✨ Created new session for user: ${userId} (Total active: ${userSessions.size})`);
     } else {
-        userSessions.get(userId).lastActivity = Date.now();
+        const session = userSessions.get(userId);
+        session.lastActivity = Date.now();
+        session.messageCount++;
     }
     
     return userSessions.get(userId).session;
@@ -123,29 +170,52 @@ function getUserSession(userId) {
 // API Endpoints
 // ----------------------------------------------------
 
-// Health check endpoint
+// IMPROVED Health check with more info
 app.get('/health', (req, res) => {
+    const memoryUsage = process.memoryUsage();
+    
     res.json({ 
         status: 'ok',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        activeSessions: userSessions.size
+        uptime: Math.floor(process.uptime()),
+        activeSessions: userSessions.size,
+        stats: sessionStats,
+        memory: {
+            heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+            heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`
+        },
+        model: modelName,
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// Chat send endpoint (STREAMING LOGIC)
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Gemini Chatbot API',
+        version: '1.0.0',
+        status: 'running',
+        endpoints: {
+            health: 'GET /health',
+            chat: 'POST /api/chat/send',
+            clear: 'POST /api/chat/clear'
+        }
+    });
+});
+
+// Chat send endpoint (STREAMING)
 app.post('/api/chat/send', chatLimiter, async (req, res) => {
     
-    // Set headers for Streaming
-    res.setHeader('Content-Type', 'text/plain'); 
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8'); 
     res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.status(200); 
 
     try {
         const { message, userId } = req.body;
         
         if (!userId || typeof userId !== 'string') {
-            // If headers are sent, we can't send JSON anymore, just end the stream with an error
             if (res.headersSent) {
                 return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: Missing or invalid userId.`);
             }
@@ -156,55 +226,56 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         
         const validation = validateMessage(message);
         if (!validation.valid) {
-             if (res.headersSent) {
-                 return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: ${validation.error}`);
+            if (res.headersSent) {
+                return res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: ${validation.error}`);
             }
             return res.status(400).json({ error: validation.error });
         }
         
-        console.log(`💬 User ${userId}: ${validation.message.substring(0, 50)}...`);
+        console.log(`💬 [${userId}] ${validation.message.substring(0, 50)}${validation.message.length > 50 ? '...' : ''}`);
         
         const chatSession = getUserSession(userId);
+        sessionStats.messagesProcessed++;
         
         const responseStream = await chatSession.sendMessageStream({ 
             message: validation.message 
         });
         
+        let chunkCount = 0;
         for await (const chunk of responseStream) {
             const chunkText = chunk.text;
             if (chunkText) {
                 res.write(chunkText);
+                chunkCount++;
             }
         }
         
-        console.log(`🤖 AI Response stream finished for user ${userId}`);
+        console.log(`🤖 [${userId}] Stream complete (${chunkCount} chunks)`);
         res.end();
         
     } catch (error) {
-        console.error('❌ Error in /api/chat/send:', error);
+        console.error('❌ Error in /api/chat/send:', error.message);
         
-        let errorMessage = 'Failed to get full response.';
+        let errorMessage = 'Failed to get response from AI.';
+        let statusCode = 500;
+        
         if (error.message?.includes('quota')) {
-             errorMessage = 'API Quota Exceeded. Please try again later.';
-        } else if (error.message?.includes('API key')) {
-             errorMessage = 'Authentication error. Invalid API configuration.';
+            errorMessage = 'API quota exceeded. Please try again later.';
+            statusCode = 429;
+        } else if (error.message?.includes('API key') || error.message?.includes('authentication')) {
+            errorMessage = 'Authentication error. Invalid API configuration.';
+            statusCode = 401;
+        } else if (error.message?.includes('timeout')) {
+            errorMessage = 'Request timeout. Please try again.';
+            statusCode = 408;
         }
 
         if (res.headersSent) {
-            // FIX 4: Send a structured error message to the stream for client handling
-            res.end(`\n\n[STREAM_ERROR] ⚠️ ERROR: ${errorMessage}.`); 
+            res.end(`\n\n[STREAM_ERROR] ⚠️ ${errorMessage}`); 
         } else {
-            const details = process.env.NODE_ENV === 'development' ? error.message : 'Internal server error';
-            
-            if (error.message?.includes('quota')) {
-                 return res.status(429).json({ error: 'API quota exceeded. Please try again later.' });
-            }
-            if (error.message?.includes('API key')) {
-                return res.status(401).json({ error: 'Authentication error. Invalid API configuration.' });
-            }
-
-            res.status(500).json({ 
-                error: 'Failed to get response from AI.',
+            const details = process.env.NODE_ENV === 'development' ? error.message : undefined;
+            res.status(statusCode).json({ 
+                error: errorMessage,
                 details: details
             });
         }
@@ -222,6 +293,7 @@ app.post('/api/chat/clear', async (req, res) => {
         
         if (userSessions.has(userId)) {
             userSessions.delete(userId);
+            sessionStats.cleared++;
             console.log(`🗑️  Cleared session for user: ${userId}`);
         }
         
@@ -236,65 +308,90 @@ app.post('/api/chat/clear', async (req, res) => {
     }
 });
 
-
 // 404 handler
 app.use((req, res) => {
-    res.status(404).json({ error: 'Endpoint not found' });
+    res.status(404).json({ 
+        error: 'Endpoint not found',
+        path: req.path,
+        method: req.method
+    });
 });
 
 // Global error handler
 app.use((error, req, res, next) => {
     console.error('❌ Unhandled error:', error);
+    
+    // Handle CORS errors
+    if (error.message === 'Not allowed by CORS') {
+        return res.status(403).json({ error: 'CORS policy violation' });
+    }
+    
     res.status(500).json({ 
         error: 'Internal server error',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
 });
 
-
 // ----------------------------------------------------
-// Start Server (Production Ready)
+// Start Server
 // ----------------------------------------------------
 
-const host = '0.0.0.0'; // FIX 3: Ensures binding to the correct interface for Production/Render
+const host = '0.0.0.0';
 
-app.listen(port, host, () => {
+const server = app.listen(port, host, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║   🤖 Gemini Chatbot Backend (Production Ready)        ║
-║   ✅ Server running at: 0.0.0.0:${port}               ║
-║   ✅ Health check: /health                            ║
+║   🤖 Gemini Chatbot Backend v1.0.0                    ║
+║   ✅ Server: http://${host}:${port}                   ║
+║   ✅ Environment: ${process.env.NODE_ENV || 'development'}                      ║
 ║   📦 Model: ${modelName}                              ║
 ║   🔒 Security: Enabled                                ║
 ║   ⚡ Rate limiting: Active                            ║
+║   🌐 CORS: ${allowedOrigins?.length || 0} origin(s) allowed              ║
 ╚═══════════════════════════════════════════════════════╝
     `);
+    
+    if (!allowedOrigins || allowedOrigins.length === 0) {
+        console.warn('⚠️  WARNING: ALLOWED_ORIGINS not configured!');
+        console.warn('   Set ALLOWED_ORIGINS in environment variables for production.');
+    }
 });
 
 // ----------------------------------------------------
-// Global Process Error Handling (Ensures process stability)
+// Graceful Shutdown
 // ----------------------------------------------------
+
+function gracefulShutdown(signal) {
+    console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
+    
+    server.close(() => {
+        console.log('✅ HTTP server closed');
+        
+        // Clear all sessions
+        const sessionCount = userSessions.size;
+        userSessions.clear();
+        console.log(`✅ Cleared ${sessionCount} active sessions`);
+        
+        console.log('👋 Goodbye!');
+        process.exit(0);
+    });
+    
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+        console.error('⚠️  Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error.message, error.stack);
-    // Graceful shutdown after uncaught exception
-    userSessions.clear();
-    process.exit(1); 
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('🛑 SIGTERM received. Shutting down gracefully...');
-    userSessions.clear();
-    process.exit(0);
-});
-
-process.on('SIGINT', () => {
-    console.log('🛑 SIGINT received. Shutting down gracefully...');
-    userSessions.clear();
-    process.exit(0);
+    console.error('❌ Uncaught Exception:', error.message);
+    console.error(error.stack);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
