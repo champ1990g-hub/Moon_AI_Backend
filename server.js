@@ -1,4 +1,4 @@
-// server.js - IMPROVED VERSION
+// server.js - FIXED VERSION
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -21,20 +21,17 @@ app.set('trust proxy', 1);
 
 app.use(helmet());
 
-// IMPROVED CORS Configuration
+// CORS Configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean);
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, Postman, etc.)
         if (!origin) return callback(null, true);
         
-        // In development, allow all origins
         if (process.env.NODE_ENV !== 'production') {
             return callback(null, true);
         }
         
-        // In production, check whitelist
         if (!allowedOrigins || allowedOrigins.length === 0) {
             console.warn('⚠️  WARNING: ALLOWED_ORIGINS not set. Blocking request from:', origin);
             return callback(new Error('CORS not configured'));
@@ -52,32 +49,23 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
 app.use(express.json({ limit: '10mb' }));
 
-// Rate limiting
+// ✅ FIXED: Rate limiting (ลบ custom keyGenerator ออก)
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
     max: 100, 
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
-    legacyHeaders: false,
-    // IMPROVED: Custom key generator for better tracking
-    keyGenerator: (req) => {
-        return req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    }
+    legacyHeaders: false
+    // ✅ ไม่ต้องใส่ keyGenerator เพราะจะใช้ default ที่รองรับ IPv6
 });
 
 const chatLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, 
     max: 20, 
-    message: { error: 'Too many chat requests, please slow down.' },
-    keyGenerator: (req) => {
-        // Rate limit per userId + IP for better control
-        const userId = req.body?.userId || 'anonymous';
-        const ip = req.ip || 'unknown';
-        return `${userId}-${ip}`;
-    }
+    message: { error: 'Too many chat requests, please slow down.' }
+    // ✅ ไม่ต้องใส่ keyGenerator
 });
 
 app.use('/api/', apiLimiter); 
@@ -98,7 +86,6 @@ const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const userSessions = new Map();
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
-// IMPROVED: More detailed session stats
 let sessionStats = {
     created: 0,
     cleared: 0,
@@ -153,7 +140,7 @@ function getUserSession(userId) {
             session: chatSession,
             lastActivity: Date.now(),
             createdAt: Date.now(),
-            messageCount: 0 // Track messages per session
+            messageCount: 0
         });
         sessionStats.created++;
         console.log(`✨ Created new session for user: ${userId} (Total active: ${userSessions.size})`);
@@ -170,7 +157,7 @@ function getUserSession(userId) {
 // API Endpoints
 // ----------------------------------------------------
 
-// IMPROVED Health check with more info
+// Health check
 app.get('/health', (req, res) => {
     const memoryUsage = process.memoryUsage();
     
@@ -321,7 +308,6 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
     console.error('❌ Unhandled error:', error);
     
-    // Handle CORS errors
     if (error.message === 'Not allowed by CORS') {
         return res.status(403).json({ error: 'CORS policy violation' });
     }
@@ -367,7 +353,6 @@ function gracefulShutdown(signal) {
     server.close(() => {
         console.log('✅ HTTP server closed');
         
-        // Clear all sessions
         const sessionCount = userSessions.size;
         userSessions.clear();
         console.log(`✅ Cleared ${sessionCount} active sessions`);
@@ -376,7 +361,6 @@ function gracefulShutdown(signal) {
         process.exit(0);
     });
     
-    // Force shutdown after 10 seconds
     setTimeout(() => {
         console.error('⚠️  Forced shutdown after timeout');
         process.exit(1);
