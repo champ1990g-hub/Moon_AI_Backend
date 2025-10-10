@@ -358,12 +358,12 @@ const host = '0.0.0.0';
 const server = app.listen(port, host, () => {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║   🤖 Gemini Chatbot Backend v1.0.0                    ║
-║   ✅ Server: http://${host}:${port}                   ║
+║   🤖 Gemini Chatbot Backend v1.0.0                                              ║
+║   ✅ Server: http://${host}:${port}                                             ║
 ║   ✅ Environment: ${process.env.NODE_ENV || 'development'}                      ║
-║   📦 Model: ${modelName}                              ║
-║   🔒 Security: Enabled                                ║
-║   ⚡ Rate limiting: Active                            ║
+║   📦 Model: ${modelName}                                                        ║
+║   🔒 Security: Enabled                                                          ║
+║   ⚡ Rate limiting: Active                                                      ║
 ║   🌐 CORS: ${allowedOrigins?.length || 'Not configured'}                        ║
 ╚═══════════════════════════════════════════════════════╝
     `);
