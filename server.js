@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { GoogleGenerativeAI } from '@google/genai/server'; // ✅ FIX: ใช้ Named Import + Subpath เพื่อแก้ TypeError
+import * as gemini from '@google/genai'; // ✅ FIX: Import ถูกต้องตาม ESM package structure
 import 'dotenv/config';
 
 const app = express();
@@ -45,7 +45,7 @@ const corsOptions = {
             callback(null, true);
         } else {
             console.warn('⚠️ CORS blocked:', origin);
-            // FIX: ใช้ null, false เพื่อให้ CORS Middleware จัดการการปฏิเสธอย่างราบรื่น ไม่ทำให้เกิด ERR_CONNECTION_RESET
+            // FIX: ใช้ null, false เพื่อให้ CORS Middleware จัดการการปฏิเสธอย่างราบรื่น
             callback(null, false); 
         }
     },
@@ -89,8 +89,8 @@ if (!process.env.GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// ✅ FIX: ใช้ class โดยตรง เนื่องจากมีการ import ที่ถูกต้องแล้ว
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
+// ✅ FIX: สร้าง client โดยอ้างถึง class ผ่าน object ที่ import มา
+const genAI = new gemini.GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
 const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // Session management
