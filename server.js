@@ -1,9 +1,9 @@
-// server.js - Production Ready Version (FINAL FIX)
+// server.js - Production Ready Version (FINAL FIX & COMPLETE)
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import * as gemini from '@google/genai'; // ✅ แก้ไข Syntax Error
+import { GoogleGenerativeAI } from '@google/genai/server'; // ✅ FIX: ใช้ Named Import + Subpath เพื่อแก้ TypeError
 import 'dotenv/config';
 
 const app = express();
@@ -13,6 +13,7 @@ const port = process.env.PORT || 3000;
 // Production Stability Fixes
 // ----------------------------------------------------
 
+// Trust the first proxy (required for Render/Load Balancer to correctly get IP for rate limiting)
 app.set('trust proxy', 1); 
 
 // ----------------------------------------------------
@@ -26,7 +27,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, Postman, curl, etc.)
+        // Allow requests with no origin (mobile apps, Postman, curl, Render Health Check, or direct browser access)
         if (!origin) return callback(null, true);
         
         // In development, allow all origins
@@ -44,7 +45,7 @@ const corsOptions = {
             callback(null, true);
         } else {
             console.warn('⚠️ CORS blocked:', origin);
-            // FIX: เปลี่ยนจากการ throw Error เป็น null, false 
+            // FIX: ใช้ null, false เพื่อให้ CORS Middleware จัดการการปฏิเสธอย่างราบรื่น ไม่ทำให้เกิด ERR_CONNECTION_RESET
             callback(null, false); 
         }
     },
@@ -75,6 +76,7 @@ const chatLimiter = rateLimit({
     legacyHeaders: false,
 });
 
+// Applies general rate limit to all /api/ endpoints (ยกเว้น / และ /health)
 app.use('/api/', apiLimiter); 
 
 // ----------------------------------------------------
@@ -87,9 +89,9 @@ if (!process.env.GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// ✅ FIX: เปลี่ยนวิธีการสร้าง client ให้ใช้ Wildcard Import
-const genAI = new gemini.GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
-const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
+// ✅ FIX: ใช้ class โดยตรง เนื่องจากมีการ import ที่ถูกต้องแล้ว
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
+const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // Session management
 const userSessions = new Map();
