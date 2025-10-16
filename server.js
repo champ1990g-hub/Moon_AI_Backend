@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { GoogleGenerativeAI } from '@google/genai'; // ✅ แก้ไขตรงนี้
+import { GoogleGenerativeAI } from '@google/genai';
 import 'dotenv/config';
 
 const app = express();
@@ -13,6 +13,7 @@ const port = process.env.PORT || 3000;
 // Production Stability Fixes
 // ----------------------------------------------------
 
+// Trust the first proxy (required for Render/Load Balancer to correctly get IP for rate limiting)
 app.set('trust proxy', 1); 
 
 // ----------------------------------------------------
@@ -26,7 +27,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, Postman, curl, etc.)
+        // Allow requests with no origin (mobile apps, Postman, curl, Render Health Check, or direct browser access)
         if (!origin) return callback(null, true);
         
         // In development, allow all origins
@@ -44,7 +45,9 @@ const corsOptions = {
             callback(null, true);
         } else {
             console.warn('⚠️ CORS blocked:', origin);
-            callback(new Error('Not allowed by CORS'));
+            // FIX 1: เปลี่ยนจากการ throw Error เป็น null, false เพื่อให้ CORS Middleware 
+            // จัดการการปฏิเสธอย่างราบรื่น ไม่ทำให้เกิด ERR_CONNECTION_RESET
+            callback(null, false); 
         }
     },
     methods: ['GET', 'POST'],
@@ -74,6 +77,7 @@ const chatLimiter = rateLimit({
     legacyHeaders: false,
 });
 
+// Applies general rate limit to all /api/ endpoints
 app.use('/api/', apiLimiter); 
 
 // ----------------------------------------------------
@@ -86,7 +90,6 @@ if (!process.env.GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// ✅ แก้ไขการสร้าง client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
 
@@ -144,7 +147,6 @@ function validateMessage(message) {
 
 function getUserSession(userId) {
     if (!userSessions.has(userId)) {
-        // ✅ แก้ไขการสร้าง chat session
         const model = genAI.getGenerativeModel({ model: modelName });
         const chatSession = model.startChat({
             history: [],
@@ -203,7 +205,6 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ✅ แก้ไข Chat endpoint
 app.post('/api/chat/send', chatLimiter, async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8'); 
     res.setHeader('Transfer-Encoding', 'chunked');
@@ -236,7 +237,6 @@ app.post('/api/chat/send', chatLimiter, async (req, res) => {
         const chatSession = getUserSession(userId);
         sessionStats.messagesProcessed++;
         
-        // ✅ แก้ไขการส่งข้อความแบบ streaming
         const result = await chatSession.sendMessageStream(validation.message);
         
         let chunkCount = 0;
@@ -319,12 +319,7 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
     console.error('❌ Unhandled error:', error);
     
-    if (error.message === 'Not allowed by CORS') {
-        return res.status(403).json({ 
-            error: 'CORS policy violation',
-            message: 'Origin not allowed'
-        });
-    }
+    // FIX 2: ลบการจัดการ CORS Error ที่ซ้ำซ้อนออก เพื่อให้การปฏิเสธ CORS ทำงานในระดับ Middleware อย่างราบรื่น
     
     res.status(500).json({ 
         error: 'Internal server error',
