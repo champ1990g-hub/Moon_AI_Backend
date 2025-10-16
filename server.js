@@ -89,8 +89,8 @@ if (!process.env.GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// ✅ FIX: สร้าง client โดยอ้างถึง class ผ่าน object ที่ import มา
-const genAI = new gemini.GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
+// ✅ FIX: สร้าง client โดยอ้างถึง class ผ่าน gemini.default.GoogleGenerativeAI
+const genAI = new gemini.default.GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
 const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // Session management
